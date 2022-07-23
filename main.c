@@ -8,6 +8,8 @@
 #include <time.h>
 #include <stdlib.h>
 
+typedef complex double complex_t; //Makes swapping out the particular type easier
+
 typedef union colour {
     struct {
         uint8_t red;
@@ -22,14 +24,11 @@ typedef union colour {
 //that's a 1.0 GiB file, the memory use is even worse as it's that plus another IMG_WIDTH * IMG_HEIGHT * 16 bytes
 #define IMG_WIDTH  16384
 #define IMG_HEIGHT 16384
-const complex double left_top = -0.15303203 +1.03979746 * I;
-const complex double right_bottom = -0.13450691 +1.02108711 * I;
+const complex_t left_top = -2 +1.5 * I;
+const complex_t right_bottom = 1 - 1.5 * I;
 const colour near = {0xFF, 0xFF, 0xFF, 0xFF}; //todo: add more colours, ex if you have 4 then split the min-max range into like 3 sections,
 const colour far = {0x00, 0x00, 0xFF, 0xFF};  //first section goes from colour A to B, 2nd B to C, 3rd C to D, (maybe 4th D to A or something)
 const colour inside = {0x00, 0x00, 0x00, 0xFF}; //Black
-
-complex double grid[IMG_HEIGHT][IMG_WIDTH] = {0};
-uint32_t out[IMG_HEIGHT][IMG_WIDTH] = {0};
 
 double min_esc = INFINITY;
 double max_esc = -INFINITY;
@@ -45,24 +44,28 @@ int main(int argc, char** argv) {
         double x2 = strtof(argv[3], NULL);
         double y2 = strtof(argv[4], NULL);
 
-        complex double first = (creal(left_top) + x1 * delta_real) + ((cimag(left_top) - y1 * delta_img) * I);
-        complex double second = (creal(right_bottom) + x2 * delta_real) + ((cimag(right_bottom) - y2 * delta_img) * I);
-        printf("Pixels (%.2f, %.2f), and (%.2f, %.2f) are at %.8f %+.8f * I and %.8f %+.8f * I\n", x1, y1, x2, y2, creal(first), cimag(first),
+        complex_t first = (creal(left_top) + x1 * delta_real) + ((cimag(left_top) - y1 * delta_img) * I);
+        complex_t second = (creal(right_bottom) + x2 * delta_real) + ((cimag(right_bottom) - y2 * delta_img) * I);
+        printf("Pixels (%.2f, %.2f), and (%.2f, %.2f) are at %.10f %+.10f * I and %.10f %+.10f * I\n", x1, y1, x2, y2, creal(first), cimag(first),
                creal(second), cimag(second));
         return 0;
     }
 
     struct timespec start;
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
-    complex double y_val = cimag(left_top) * I;
+
+    complex_t (*grid)[IMG_WIDTH] = malloc(sizeof(complex_t[IMG_HEIGHT][IMG_WIDTH]));
+    uint32_t (*out)[IMG_WIDTH] = malloc(sizeof(uint32_t[IMG_HEIGHT][IMG_WIDTH]));
+
+    const long num_threads = sysconf(_SC_NPROCESSORS_CONF);
+
 //    printf("y: %f\n", cimag(y_val));
     for (size_t y = 0; y < IMG_HEIGHT; y++) {
-        y_val -= delta_img * I;
+        complex_t y_val = (cimag(left_top) - y * delta_img) * I;
 //        printf("y: %f\n", cimag(y_val));
 
-        complex double x_val = creal(left_top);
         for (size_t x = 0; x < IMG_WIDTH; x++) {
-            x_val += delta_real;
+            complex_t x_val = creal(left_top) + x * delta_real;
 //            printf("x: %f\n", creal(x_val));
             grid[y][x] = x_val + y_val;
         }
@@ -70,12 +73,12 @@ int main(int argc, char** argv) {
 
     for (size_t y = 0; y < IMG_HEIGHT; y++) {
         for (size_t x = 0; x < IMG_WIDTH; x++) {
-            complex double z = 0;
-            complex double c = grid[y][x];
+            complex_t z = 0;
+            complex_t c = grid[y][x];
             bool broke = false;
             for (size_t i = 0; i < 100; i++) {
                 z = z*z + c;
-                if (cabs(z) > 2) {
+                if (creal(z)*creal(z) + cimag(z)*+cimag(z) > 4) {
                     broke = true;
                     break;
                 }
