@@ -120,9 +120,9 @@ int main(int argc, char** argv) {
 
     int fd = open("out.bin", O_CREAT | O_WRONLY, S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH);
     ssize_t written = 0;
-    while (written != sizeof(out)) {
-        written += write(fd, ((char*)out) + written, sizeof(out) - written); //todo: lol stop dumping to a raw file and
-    }                                                                               //get something to write PNGs
+    while (written != sizeof(uint32_t[IMG_HEIGHT][IMG_WIDTH])) {
+        written += write(fd, ((char*)out) + written, sizeof(uint32_t[IMG_HEIGHT][IMG_WIDTH]) - written); //todo: lol stop dumping to a raw file and
+    }                                                                                                           //get something to write PNGs
     close(fd); //For now I've just been using python or imagemagik to generate the PNGs from this data
 
     struct timespec stop;
