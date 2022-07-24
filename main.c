@@ -9,6 +9,10 @@
 #include <stdlib.h>
 #include <threads.h>
 
+#define MAGICKCORE_QUANTUM_DEPTH 16
+#define MAGICKCORE_HDRI_ENABLE 1
+#include <MagickWand/MagickWand.h>
+
 typedef complex double complex_t; //Makes swapping out the particular type easier
 
 typedef union colour {
@@ -21,8 +25,6 @@ typedef union colour {
     uint32_t packed;
 } colour;
 
-//Do be warned about these, it will create a raw pixel output file of IMG_WIDTH * IMG_HEIGHT * 4 bytes, for h&w of 1638
-//that's a 1.0 GiB file, the memory use is even worse as it's that plus another IMG_WIDTH * IMG_HEIGHT * 16 bytes
 #define IMG_WIDTH  16384
 #define IMG_HEIGHT 16384
 const complex_t left_top = -2 +1.5 * I;
@@ -38,6 +40,9 @@ uint32_t (*out)[IMG_WIDTH];
 
 double* min_esc_thr;
 double* max_esc_thr;
+double min_esc;
+double max_esc;
+double diff;
 
 typedef struct thread_args {
     double delta_real;
@@ -46,14 +51,14 @@ typedef struct thread_args {
     size_t num_threads;
 } thread_args;
 
-int compute_values(void* args) {
+int compute_fractal(void* args) {
     double delta_img = ((thread_args*) args)->delta_img;
     double delta_real = ((thread_args*) args)->delta_real;
-    size_t num = ((thread_args*) args)->thread_num;
-    size_t step = ((thread_args*) args)->num_threads;
-//    printf("id: %zu, step: %zu, delta_img: %f, delta_real: %f\n", num, step, delta_img, delta_real);
+    size_t thread_num = ((thread_args*) args)->thread_num;
+    size_t num_threads = ((thread_args*) args)->num_threads;
+//    printf("id: %zu, num_threads: %zu, delta_img: %f, delta_real: %f\n", thread_num, num_threads, delta_img, delta_real);
 
-    for (size_t y = num; y < IMG_HEIGHT; y += step) {
+    for (size_t y = thread_num; y < IMG_HEIGHT; y += num_threads) {
         complex_t y_val = (cimag(left_top) - y * delta_img) * I;
 
         for (size_t x = 0; x < IMG_WIDTH; x++) {
@@ -62,7 +67,7 @@ int compute_values(void* args) {
         }
     }
 
-    for (size_t y = num; y < IMG_HEIGHT; y += step) {
+    for (size_t y = thread_num; y < IMG_HEIGHT; y += num_threads) {
         for (size_t x = 0; x < IMG_WIDTH; x++) {
             complex_t z = 0;
             complex_t c = grid[y][x];
@@ -79,14 +84,37 @@ int compute_values(void* args) {
                 continue;
             }
             double z_abs = cabs(z);
-            if (z_abs > max_esc_thr[num])
-                max_esc_thr[num] = z_abs;
-            if (z_abs < min_esc_thr[num])
-                min_esc_thr[num] = z_abs;
+            if (z_abs > max_esc_thr[thread_num])
+                max_esc_thr[thread_num] = z_abs;
+            if (z_abs < min_esc_thr[thread_num])
+                min_esc_thr[thread_num] = z_abs;
             grid[y][x] = z_abs;
         }
     }
-//    printf("id: %zu min: %f, max: %f\n", num, min_esc_thr[num], max_esc_thr[num]);
+//    printf("id: %zu min: %f, max: %f\n", thread_num, min_esc_thr[thread_num], max_esc_thr[thread_num]);
+    return 0;
+}
+
+int compute_pixels(void* args) {
+    size_t thread_num = ((thread_args*) args)->thread_num;
+    size_t num_threads = ((thread_args*) args)->num_threads;
+    for (size_t y = thread_num; y < IMG_HEIGHT; y += num_threads) {
+        for (size_t x = 0; x < IMG_WIDTH; x++) {
+            double val = creal(grid[y][x]);
+            if (val == 0) {
+//                printf("inside at %04zu, %04zu", x, y);
+                out[y][x] = inside.packed;
+                continue;
+            }
+            colour new = {(val - min_esc) / diff * (near.red - far.red) + far.red,
+                          (val - min_esc) / diff * (near.green - far.green) + far.green,
+                          (val - min_esc) / diff * (near.blue - far.blue) + far.blue,
+                          (val - min_esc) / diff * (near.alpha - far.alpha) + far.alpha};
+//            printf("%f\n", (val - min_esc_thr) / diff * (near.red   - far.red)   + far.red);
+//            printf("%02hhX, \n", (char)((val - min_esc_thr) / diff * (near.red - far.red)));
+            out[y][x] = new.packed;
+        }
+    }
     return 0;
 }
 
@@ -130,20 +158,20 @@ int main(int argc, char** argv) {
         args[i].thread_num = i;
         if (i != 0) { //Using the main thread to do the first pool after
             thrd_t id;
-            if (thrd_create(&id, &compute_values, args + i) == thrd_error) {
+            if (thrd_create(&id, &compute_fractal, args + i) == thrd_error) {
                 fprintf(stderr, "Failed to create thread num %zu, exiting\n", i);
                 exit(1);
             }
             thread_ids[i - 1] = id;
         }
     }
-    compute_values(args);
+    compute_fractal(args);
 
     for (size_t i = 0; i < num_threads - 1; i++)
         thrd_join(thread_ids[i], NULL);
 
-    double min_esc = min_esc_thr[0];
-    double max_esc = max_esc_thr[0];
+    min_esc = min_esc_thr[0];
+    max_esc = max_esc_thr[0];
     for (size_t i = 1; i < num_threads; i++) {
         if (min_esc_thr[i] < min_esc)
             min_esc = min_esc_thr[i];
@@ -151,38 +179,42 @@ int main(int argc, char** argv) {
             max_esc = max_esc_thr[i];
     }
 
-    const double diff = max_esc - min_esc;
+    diff = max_esc - min_esc;
     printf("min: %f, max: %f, diff: %f\n", min_esc, max_esc, diff);
-//    printf("%f\n", diff);
 
-    for (size_t y = 0; y < IMG_HEIGHT; y++) {
-        for (size_t x = 0; x < IMG_WIDTH; x++) {
-            double val = creal(grid[y][x]);
-            if (val == 0) {
-//                printf("inside at %04zu, %04zu", x, y);
-                out[y][x] = inside.packed;
-                continue;
-            }
-            colour new = {(val - min_esc) / diff * (near.red - far.red) + far.red,
-                          (val - min_esc) / diff * (near.green - far.green) + far.green,
-                          (val - min_esc) / diff * (near.blue - far.blue) + far.blue,
-                          (val - min_esc) / diff * (near.alpha - far.alpha) + far.alpha};
-//            printf("%f\n", (val - min_esc_thr) / diff * (near.red   - far.red)   + far.red);
-//            printf("%02hhX, \n", (char)((val - min_esc_thr) / diff * (near.red - far.red)));
-            out[y][x] = new.packed;
+    for (size_t i = 1; i < num_threads; i++) {
+        thrd_t id;
+        if (thrd_create(&id, &compute_pixels, args + i) == thrd_error) {
+            fprintf(stderr, "Failed to create thread num %zu, exiting\n", i);
+            exit(1);
         }
+        thread_ids[i - 1] = id;
     }
-
-    int fd = open("out.bin", O_CREAT | O_WRONLY, S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH);
-    ssize_t written = 0;
-    while (written != sizeof(uint32_t[IMG_HEIGHT][IMG_WIDTH])) {
-        written += write(fd, ((char*)out) + written, sizeof(uint32_t[IMG_HEIGHT][IMG_WIDTH]) - written); //todo: lol stop dumping to a raw file and
-    }                                                                                                           //get something to write PNGs
-    close(fd); //For now I've just been using python or imagemagik to generate the PNGs from this data
+    compute_pixels(args);
+    for (size_t i = 0; i < num_threads - 1; i++)
+        thrd_join(thread_ids[i], NULL);
 
     struct timespec stop;
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &stop);
     double result = (stop.tv_sec - start.tv_sec) + (stop.tv_nsec - start.tv_nsec) * 1e-9; // in microseconds
-    printf("Time taken: %f", result);
+    printf("Time taken on fractal: %f\n", result);
+
+    printf("starting image write, please wait for finish\n");
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
+
+    MagickWand* magick_wand = NewMagickWand();
+    MagickWandGenesis();
+    MagickConstituteImage(magick_wand, IMG_WIDTH, IMG_HEIGHT, "RGBA", CharPixel, out);
+    if (MagickWriteImages(magick_wand, "out.png", MagickFalse) == MagickFalse) {
+        fprintf(stderr, "Failed to save image!\n");
+    }
+    DestroyMagickWand(magick_wand);
+    MagickWandTerminus();
+    printf("image write finished\n");
+
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &stop);
+    result = (stop.tv_sec - start.tv_sec) + (stop.tv_nsec - start.tv_nsec) * 1e-9; // in microseconds
+    printf("Time taken on image write: %f\n", result);
+
     return 0;
 }
