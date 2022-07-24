@@ -4,4 +4,4 @@ project(FractalFun C)
 set(CMAKE_C_STANDARD 17)
 
 add_executable(FractalFun main.c)
-target_link_libraries(FractalFun m)
+target_link_libraries(FractalFun m atomic)

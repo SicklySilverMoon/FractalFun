@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <time.h>
 #include <stdlib.h>
+#include <threads.h>
 
 typedef complex double complex_t; //Makes swapping out the particular type easier
 
@@ -30,8 +31,64 @@ const colour near = {0xFF, 0xFF, 0xFF, 0xFF}; //todo: add more colours, ex if yo
 const colour far = {0x00, 0x00, 0xFF, 0xFF};  //first section goes from colour A to B, 2nd B to C, 3rd C to D, (maybe 4th D to A or something)
 const colour inside = {0x00, 0x00, 0x00, 0xFF}; //Black
 
-double min_esc = INFINITY;
-double max_esc = -INFINITY;
+_Atomic complex_t (*grid)[IMG_WIDTH];
+//_Atomic bool (*gridb)[IMG_WIDTH];
+//complex_t grid[IMG_HEIGHT][IMG_WIDTH];
+uint32_t (*out)[IMG_WIDTH];
+
+double* min_esc_thr;
+double* max_esc_thr;
+
+typedef struct thread_args {
+    double delta_real;
+    double delta_img;
+    size_t thread_num; //[0, num_threads - 1]
+    size_t num_threads;
+} thread_args;
+
+int compute_values(void* args) {
+    double delta_img = ((thread_args*) args)->delta_img;
+    double delta_real = ((thread_args*) args)->delta_real;
+    size_t num = ((thread_args*) args)->thread_num;
+    size_t step = ((thread_args*) args)->num_threads;
+//    printf("id: %zu, step: %zu, delta_img: %f, delta_real: %f\n", num, step, delta_img, delta_real);
+
+    for (size_t y = num; y < IMG_HEIGHT; y += step) {
+        complex_t y_val = (cimag(left_top) - y * delta_img) * I;
+
+        for (size_t x = 0; x < IMG_WIDTH; x++) {
+            complex_t x_val = creal(left_top) + x * delta_real;
+            grid[y][x] = x_val + y_val;
+        }
+    }
+
+    for (size_t y = num; y < IMG_HEIGHT; y += step) {
+        for (size_t x = 0; x < IMG_WIDTH; x++) {
+            complex_t z = 0;
+            complex_t c = grid[y][x];
+            bool broke = false;
+            for (size_t i = 0; i < 1500; i++) {
+                z = z*z + c;
+                if (creal(z)*creal(z) + cimag(z)*cimag(z) > 4) {
+                    broke = true;
+                    break;
+                }
+            }
+            if (!broke) {
+                grid[y][x] = 0;
+                continue;
+            }
+            double z_abs = cabs(z);
+            if (z_abs > max_esc_thr[num])
+                max_esc_thr[num] = z_abs;
+            if (z_abs < min_esc_thr[num])
+                min_esc_thr[num] = z_abs;
+            grid[y][x] = z_abs;
+        }
+    }
+//    printf("id: %zu min: %f, max: %f\n", num, min_esc_thr[num], max_esc_thr[num]);
+    return 0;
+}
 
 int main(int argc, char** argv) {
     double delta_real = (creal(right_bottom) - creal(left_top)) / IMG_WIDTH;
@@ -54,48 +111,46 @@ int main(int argc, char** argv) {
     struct timespec start;
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
 
-    complex_t (*grid)[IMG_WIDTH] = malloc(sizeof(complex_t[IMG_HEIGHT][IMG_WIDTH]));
-    uint32_t (*out)[IMG_WIDTH] = malloc(sizeof(uint32_t[IMG_HEIGHT][IMG_WIDTH]));
+    const size_t num_threads = sysconf(_SC_NPROCESSORS_CONF); //very POSIX specific
 
-    const long num_threads = sysconf(_SC_NPROCESSORS_CONF);
+    grid = malloc(sizeof(complex_t[IMG_HEIGHT][IMG_WIDTH]));
+    out = malloc(sizeof(uint32_t[IMG_HEIGHT][IMG_WIDTH]));
+    min_esc_thr = malloc(sizeof(double) * num_threads);
+    max_esc_thr = malloc(sizeof(double) * num_threads);
 
-//    printf("y: %f\n", cimag(y_val));
-    for (size_t y = 0; y < IMG_HEIGHT; y++) {
-        complex_t y_val = (cimag(left_top) - y * delta_img) * I;
-//        printf("y: %f\n", cimag(y_val));
+    thread_args* args = malloc(sizeof(thread_args) * num_threads);
+    thrd_t* thread_ids = malloc(sizeof(thrd_t) * (num_threads - 1));
 
-        for (size_t x = 0; x < IMG_WIDTH; x++) {
-            complex_t x_val = creal(left_top) + x * delta_real;
-//            printf("x: %f\n", creal(x_val));
-            grid[y][x] = x_val + y_val;
+    for (size_t i = 0; i < num_threads; i++) {
+        min_esc_thr[i] = INFINITY;
+        max_esc_thr[i] = -INFINITY;
+        args[i].delta_img = delta_img;
+        args[i].delta_real = delta_real;
+        args[i].num_threads = num_threads;
+        args[i].thread_num = i;
+        if (i != 0) { //Using the main thread to do the first pool after
+            thrd_t id;
+            if (thrd_create(&id, &compute_values, args + i) == thrd_error) {
+                fprintf(stderr, "Failed to create thread num %zu, exiting\n", i);
+                exit(1);
+            }
+            thread_ids[i - 1] = id;
         }
     }
+    compute_values(args);
 
-    for (size_t y = 0; y < IMG_HEIGHT; y++) {
-        for (size_t x = 0; x < IMG_WIDTH; x++) {
-            complex_t z = 0;
-            complex_t c = grid[y][x];
-            bool broke = false;
-            for (size_t i = 0; i < 100; i++) {
-                z = z*z + c;
-                if (creal(z)*creal(z) + cimag(z)*+cimag(z) > 4) {
-                    broke = true;
-                    break;
-                }
-            }
-            if (!broke) {
-//                printf("lte 2 at %04zu, %04zu\n", x, y);
-                grid[y][x] = 0;
-                continue;
-            }
-            double z_abs = cabs(z);
-            if (z_abs > max_esc)
-                max_esc = z_abs;
-            if (z_abs < min_esc)
-                min_esc = z_abs;
-            grid[y][x] = z_abs;
-        }
+    for (size_t i = 0; i < num_threads - 1; i++)
+        thrd_join(thread_ids[i], NULL);
+
+    double min_esc = min_esc_thr[0];
+    double max_esc = max_esc_thr[0];
+    for (size_t i = 1; i < num_threads; i++) {
+        if (min_esc_thr[i] < min_esc)
+            min_esc = min_esc_thr[i];
+        if (max_esc_thr[i] > max_esc)
+            max_esc = max_esc_thr[i];
     }
+
     const double diff = max_esc - min_esc;
     printf("min: %f, max: %f, diff: %f\n", min_esc, max_esc, diff);
 //    printf("%f\n", diff);
@@ -108,12 +163,12 @@ int main(int argc, char** argv) {
                 out[y][x] = inside.packed;
                 continue;
             }
-            colour new = {(val - min_esc) / diff * (near.red   - far.red)   + far.red,
+            colour new = {(val - min_esc) / diff * (near.red - far.red) + far.red,
                           (val - min_esc) / diff * (near.green - far.green) + far.green,
-                          (val - min_esc) / diff * (near.blue  - far.blue)  + far.blue,
+                          (val - min_esc) / diff * (near.blue - far.blue) + far.blue,
                           (val - min_esc) / diff * (near.alpha - far.alpha) + far.alpha};
-//            printf("%f\n", (val - min_esc) / diff * (near.red   - far.red)   + far.red);
-//            printf("%02hhX, \n", (char)((val - min_esc) / diff * (near.red - far.red)));
+//            printf("%f\n", (val - min_esc_thr) / diff * (near.red   - far.red)   + far.red);
+//            printf("%02hhX, \n", (char)((val - min_esc_thr) / diff * (near.red - far.red)));
             out[y][x] = new.packed;
         }
     }
