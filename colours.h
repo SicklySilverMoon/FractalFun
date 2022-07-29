@@ -1,3 +1,6 @@
+#ifndef FRACTALFUN_COLOURS_H
+#define FRACTALFUN_COLOURS_H
+
 #include <stdint.h>
 #include <stddef.h>
 
@@ -516,4 +519,6 @@ colour colours[] = {
     {0xFA, 0x00, 0x00, 0xFF},
 };
 
-const size_t num_colours = (sizeof(colours) / (sizeof(colours[0])));
+const size_t NUM_COLOURS = (sizeof(colours) / (sizeof(colours[0])));
+
+#endif //FRACTALFUN_COLOURS_H

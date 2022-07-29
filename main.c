@@ -1,7 +1,5 @@
 #include <stdio.h>
-#include <complex.h>
 #include <stdbool.h>
-#include <math.h>
 #include <unistd.h> //todo: figure out an OS neutral way to get thread count (like asking for it)
 #include <stdint.h>
 #include <time.h>
@@ -11,16 +9,16 @@
 #define MAGICKCORE_QUANTUM_DEPTH 16
 #define MAGICKCORE_HDRI_ENABLE 1
 #include <MagickWand/MagickWand.h>
+#include <fcntl.h>
 
+#include "complex_t.h"
 #include "colours.h"
-
-typedef complex double complex_t; //Makes swapping pixels the particular type easier
 
 #define IMG_WIDTH  16384
 #define IMG_HEIGHT 16384
 #define MAX_ITRS 1500
-const complex_t left_top = -0.1529398937 +1.0397799646 * I;
-const complex_t right_bottom = -0.1529394746 +1.0397795414 * I;
+const complex_t left_top = ctor(-2, 1.5);
+const complex_t right_bottom = ctor(1, -1.5);
 
 complex_t (*grid)[IMG_WIDTH];
 uint32_t (*pixels)[IMG_WIDTH];
@@ -36,8 +34,8 @@ typedef struct thread_args {
 int compute_fractal(void* args);
 
 int main(int argc, char** argv) {
-    delta_real = (creal(right_bottom) - creal(left_top)) / IMG_WIDTH;
-    delta_img = (cimag(left_top) - cimag(right_bottom)) / IMG_HEIGHT;
+    delta_real = (real(right_bottom) - real(left_top)) / IMG_WIDTH;
+    delta_img = (imag(left_top) - imag(right_bottom)) / IMG_HEIGHT;
 
     if (argc > 1) { //means 2 pixel coordinate values were passed in, and we want to know what the coordinates are for them
         if (argc < 5) {
@@ -50,10 +48,10 @@ int main(int argc, char** argv) {
         double x2 = strtod(argv[3], NULL);
         double y2 = strtod(argv[4], NULL);
 
-        complex_t first = (creal(left_top) + x1 * delta_real) + ((cimag(left_top) - y1 * delta_img) * I);
-        complex_t second = (creal(left_top) + x2 * delta_real) + ((cimag(left_top) - y2 * delta_img) * I);
-        printf("Pixels (%.2f, %.2f), and (%.2f, %.2f) are at %.10f %+.10f * I and %.10f %+.10f * I\n", x1, y1, x2, y2, creal(first), cimag(first),
-               creal(second), cimag(second));
+        complex_t first = ctor(real(left_top) + x1 * delta_real, imag(left_top) - y1 * delta_img);
+        complex_t second = ctor(real(left_top) + x2 * delta_real, imag(left_top) - y2 * delta_img);
+        printf("Pixels (%.2f, %.2f), and (%.2f, %.2f) are at (%.10f, %+.10f) and (%.10f, %+.10f)\n", x1, y1, x2, y2, real(first), imag(first),
+               real(second), imag(second));
         return 0;
     }
 
@@ -97,14 +95,10 @@ int main(int argc, char** argv) {
     printf("starting image write, please wait for finish\n");
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
 
-    MagickWand* magick_wand = NewMagickWand();
-    MagickWandGenesis();
-    MagickConstituteImage(magick_wand, IMG_WIDTH, IMG_HEIGHT, "RGBA", CharPixel, pixels);
-    if (MagickWriteImages(magick_wand, "fractal.png", MagickFalse) == MagickFalse) {
-        fprintf(stderr, "Failed to save image!\n");
-    }
-    DestroyMagickWand(magick_wand);
-    MagickWandTerminus();
+    //todo: replace this with a PNG writer that ISN'T imagemagick, it has a tendency to crash with the burning ship
+    int fd = open("frac.bin", O_CREAT | O_TRUNC | O_WRONLY, S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH);
+    write(fd, pixels, sizeof(uint32_t[IMG_HEIGHT][IMG_WIDTH]));
+
     printf("image write finished\n");
 
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &stop);
@@ -120,23 +114,24 @@ int compute_fractal(void* args) {
 //    printf("id: %zu, num_threads: %zu, delta_img: %f, delta_real: %f\n", thread_num, num_threads, delta_img, delta_real);
 
     for (size_t y = thread_num; y < IMG_HEIGHT; y += num_threads) {
-        complex_t y_val = (cimag(left_top) - y * delta_img) * I;
+        complex_t y_val = ctor(0, imag(left_top) - y * delta_img);
 
         for (size_t x = 0; x < IMG_WIDTH; x++) {
-            complex_t x_val = creal(left_top) + x * delta_real;
-            grid[y][x] = x_val + y_val;
+            complex_t x_val = ctor(real(left_top) + x * delta_real, 0);
+            grid[y][x] = add(x_val, y_val);
         }
     }
 
     for (size_t y = thread_num; y < IMG_HEIGHT; y += num_threads) {
         for (size_t x = 0; x < IMG_WIDTH; x++) {
-            complex_t z = 0;
+            complex_t z = ctor(0, 0);
             complex_t c = grid[y][x];
             bool broke = false;
             size_t itr;
             for (itr = 0; itr < MAX_ITRS; itr++) {
-                z = z*z + c;
-                if (creal(z)*creal(z) + cimag(z)*cimag(z) > (1 << 16)) {
+                z = add(mul(z, z), c);
+//                z = ctor(fabs(real(z)), fabs(imag(z)));
+                if (sabs(z) > (4)) {
                     broke = true;
                     break;
                 }
@@ -146,19 +141,21 @@ int compute_fractal(void* args) {
 //                grid[y][x] = 0 + -1 * I; //values inside_colour the set should not affect colourings of those outside
                 continue;
             }
-            //https://en.wikipedia.org/wiki/Plotting_algorithms_for_the_Mandelbrot_set#Continuous_(smooth)_coloring
-            double log_zn = log(creal(z) * creal(z) + cimag(z) * cimag(z)) / 2;
-            double nu = log2(log_zn / log(2));
-            double itr_d = itr + 1 - nu;
-            colour first = colours[(size_t) (itr_d / ((double) MAX_ITRS / num_colours))];
-            colour second = colours[((size_t) (itr_d / ((double) MAX_ITRS / num_colours))) + 1];
-            double frac = fmod(itr_d, 1);
+
+            double continuous_index = itr + 1 - (log(2) / abs(z)) / log(2);
+            size_t idx = continuous_index / (MAX_ITRS / NUM_COLOURS);
+            colour first = colours[idx];
+            colour second = colours[(idx + 1) % NUM_COLOURS];
+            double frac = fmod(continuous_index, 1);
             int rr = second.red   - first.red;
             int rg = second.green - first.green;
             int rb = second.blue  - first.blue;
             int ra = second.alpha - first.alpha;
             colour new = {frac * rr + first.red, frac * rg + first.green, frac * rb + first.blue, frac * ra + first.alpha};
             pixels[y][x] = new.packed;
+            if (new.alpha != 0xFF) {
+                printf("x: %zu, y: %zu, itrs: %zu, cont_idx: %f, eqn: %f, c: %u\n", x, y, itr, continuous_index, abs(z), htobe32(new.packed));
+            }
         }
     }
 //    printf("id: %zu min: %f, max: %f\n", thread_num, min_esc_thr[thread_num], max_esc_thr[thread_num]);
