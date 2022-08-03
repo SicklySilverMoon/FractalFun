@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdbool.h>
 #include <unistd.h> //todo: figure out an OS neutral way to get thread count (like asking for it)
@@ -5,20 +6,16 @@
 #include <time.h>
 #include <stdlib.h>
 #include <threads.h>
-
-#define MAGICKCORE_QUANTUM_DEPTH 16
-#define MAGICKCORE_HDRI_ENABLE 1
-#include <MagickWand/MagickWand.h>
-#include <fcntl.h>
-
+#include <sys/stat.h>
+#include "lodepng/lodepng.h"
 #include "complex_t.h"
 #include "colours.h"
 
 #define IMG_WIDTH  16384
 #define IMG_HEIGHT 16384
 #define MAX_ITRS 1500
-const complex_t left_top = ctor(-2, 1.5);
-const complex_t right_bottom = ctor(1, -1.5);
+const complex_t left_top = ctor(-2.0000000000, +1.2377929688);
+const complex_t right_bottom = ctor(0.4755859375, -1.2377929688);
 
 complex_t (*grid)[IMG_WIDTH];
 uint32_t (*pixels)[IMG_WIDTH];
@@ -89,15 +86,27 @@ int main(int argc, char** argv) {
 
     struct timespec stop;
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &stop);
-    double result = (stop.tv_sec - start.tv_sec) + (stop.tv_nsec - start.tv_nsec) * 1e-9;
+    double result = ((stop.tv_sec - start.tv_sec) + (stop.tv_nsec - start.tv_nsec) * 1e-9) / num_threads;
     printf("Time taken on fractal: %f\n", result);
 
     printf("starting image write, please wait for finish\n");
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
 
-    //todo: replace this with a PNG writer that ISN'T imagemagick, it has a tendency to crash with the burning ship
-    int fd = open("frac.bin", O_CREAT | O_TRUNC | O_WRONLY, S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH);
-    write(fd, pixels, sizeof(uint32_t[IMG_HEIGHT][IMG_WIDTH]));
+    struct stat statbuf;
+    if (stat(str, &statbuf) != -1) {
+        if (!S_ISDIR(statbuf.st_mode)) {
+            remove(str);
+            mkdir(str, S_IRWXU | S_IRWXG | S_IRWXO);
+        }
+    } else {
+        mkdir(str, S_IRWXU | S_IRWXG | S_IRWXO);
+    }
+
+    char* filename;
+    asprintf(&filename, "%s/(%.10f, %+.10f)-(%.10f, %+.10f) (%u itr) (%upx x %upx).png", str, real(left_top),
+             imag(left_top), real(right_bottom), imag(right_bottom), MAX_ITRS, IMG_WIDTH, IMG_HEIGHT);
+    lodepng_encode32_file(filename, (unsigned char*) pixels, IMG_WIDTH, IMG_HEIGHT);
+    free(filename);
 
     printf("image write finished\n");
 
@@ -129,7 +138,8 @@ int compute_fractal(void* args) {
             bool broke = false;
             size_t itr;
             for (itr = 0; itr < MAX_ITRS; itr++) {
-                z = add(mul(z, z), c);
+                z = sub(z, ctor(1, 0));
+                z = add(mul(z, mul(z, z)), c);
 //                z = ctor(fabs(real(z)), fabs(imag(z)));
                 if (sabs(z) > (4)) {
                     broke = true;
@@ -143,7 +153,7 @@ int compute_fractal(void* args) {
             }
 
             double continuous_index = itr + 1 - (log(2) / abs(z)) / log(2);
-            size_t idx = continuous_index / (MAX_ITRS / NUM_COLOURS);
+            size_t idx = continuous_index / ((double) MAX_ITRS / NUM_COLOURS);
             colour first = colours[idx];
             colour second = colours[(idx + 1) % NUM_COLOURS];
             double frac = fmod(continuous_index, 1);
@@ -153,9 +163,6 @@ int compute_fractal(void* args) {
             int ra = second.alpha - first.alpha;
             colour new = {frac * rr + first.red, frac * rg + first.green, frac * rb + first.blue, frac * ra + first.alpha};
             pixels[y][x] = new.packed;
-            if (new.alpha != 0xFF) {
-                printf("x: %zu, y: %zu, itrs: %zu, cont_idx: %f, eqn: %f, c: %u\n", x, y, itr, continuous_index, abs(z), htobe32(new.packed));
-            }
         }
     }
 //    printf("id: %zu min: %f, max: %f\n", thread_num, min_esc_thr[thread_num], max_esc_thr[thread_num]);

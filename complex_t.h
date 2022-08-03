@@ -10,6 +10,8 @@
 #ifdef COMPLEX_DOUBLE
     typedef complex double complex_t;
 
+    #define str "complex double"
+
     #define ctor(re, im) ((re) + (im) * I)
 
     #define imag(z) cimag((z))
@@ -32,14 +34,15 @@
 
     typedef struct split_complex_double complex_t;
 
+    #define str "split complex double"
+
     #define ctor(re, im) ((complex_t){(re), (im)})
 
     #define imag(z) (z).re
     #define real(z) (z).im
-    //Now you may think "Hey, isn't the split complex "absolute value" a^2 - b^2?" And the answer is yes, but for measuring
-    //escape values and determine if a value is cycling, you need to check it like this
+    //"Why abs on the sabs?" Because I don't want to have to do a double inequality
     #define abs(z) sqrt(sabs(z))
-    #define sabs(z) fabs((z).re * (z).re + (z).im * (z).im)
+    #define sabs(z) fabs(((z).re * (z).re) - ((z).im * (z).im))
 
     //God I wish C had operator overloading sometimes
     #define add(z, w) ((complex_t)ctor((z).re + (w).re, (z).im + (w).im))
