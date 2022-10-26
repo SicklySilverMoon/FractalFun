@@ -1,10 +1,9 @@
 cmake_minimum_required(VERSION 3.21)
-project(FractalFun C)
+project(FractalFun CXX)
 
-set(CMAKE_C_STANDARD 17)
-FIND_PACKAGE(ImageMagick REQUIRED COMPONENTS MagickWand)
+set(CMAKE_CXX_STANDARD 20)
 
-add_executable(FractalFun main.c colours.h complex_t.h lodepng/lodepng.c lodepng/lodepng.h)
+add_executable(FractalFun main.cpp colours.h complex_t.h lodepng/lodepng.cpp lodepng/lodepng.h)
 target_link_libraries(FractalFun m atomic ${ImageMagick_LIBRARIES})
 target_include_directories(FractalFun PUBLIC ${ImageMagick_INCLUDE_DIRS})
 message(NOTICE, ${ImageMagick_MagickWand_INCLUDE_DIRS})
