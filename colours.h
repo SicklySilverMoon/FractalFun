@@ -6,7 +6,11 @@
 #include <cstdint>
 #include <cstddef>
 
-class colour {
+struct ThreeColour {
+    uint8_t blue, green, red;
+};
+
+class Colour {
 private:
     const struct {
         uint8_t redVal;
@@ -23,9 +27,10 @@ public:
     [[nodiscard]] uint8_t alpha()   const {return c_struct.alphaVal;};
     [[nodiscard]] uint32_t packed() const {return packedVal;};
 
-    colour(uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha) : c_struct{red, green, blue, alpha}, packedVal(std::bit_cast<uint32_t>(c_struct)) {};
+    Colour(uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha) : c_struct{red, green, blue, alpha}, packedVal(std::bit_cast<uint32_t>(c_struct)) {};
+    explicit Colour(uint32_t packed) : c_struct(std::bit_cast<decltype(c_struct)>(packed)), packedVal{packed} {};
 };
 
-const colour inside_colour{0x00, 0x00, 0x00, 0xFF}; //Black
+const Colour inside_colour{0x00, 0x00, 0x00, 0xFF}; //Black
 
 #endif //FRACTALFUN_COLOURS_H

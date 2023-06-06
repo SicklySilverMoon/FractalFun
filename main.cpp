@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 
 #include "lodepng/lodepng.h"
+#include "bmpWriter.h"
 
 #include "complex_t.h"
 #include "colours.h"
@@ -21,7 +22,7 @@ typedef struct thread_args {
     size_t img_height;
     complex_t left_top;
     complex_t right_bottom;
-    complex_t* grid;
+//    complex_t* grid;
     uint32_t* pixels;
 } thread_args;
 
@@ -48,26 +49,30 @@ int main(int argc, char** argv) {
 
     if (argc > 1) { //means 2 pixel coordinate values were passed in, and we want to know what the coordinates are for them
         if (strcmp(argv[1], "-p") == 0) {
-            if (argc < 10) {
-                fprintf(stderr, "Pixel to co-ord mapping requires 4 arguments!\n");
+            if (argc < 12) {
+                fprintf(stderr, "Pixel to co-ord mapping requires 10 arguments: width height left_top_x left_top_y bottom_right_x bottom_right_y pixel_left_top_x pixel_left_top_y pixel_bottom_right_x pixel_bottom_right_y\n");
                 return 1;
             }
-            double top_left_real = strtod(argv[2], nullptr);
-            double top_left_img = strtod(argv[3], nullptr);
-            double bottom_right_real = strtod(argv[4], nullptr);
-            double bottom_right_img = strtod(argv[5], nullptr);
+            img_width = strtoull(argv[2], nullptr, 10);
+            img_height = strtoull(argv[3], nullptr, 10);
+
+            double top_left_real = strtod(argv[4], nullptr);
+            double top_left_img = strtod(argv[5], nullptr);
+            double bottom_right_real = strtod(argv[6], nullptr);
+            double bottom_right_img = strtod(argv[7], nullptr);
             const complex_t::value_type delta_real = (bottom_right_real - top_left_real) / img_width;
             const complex_t::value_type delta_img = (top_left_img - bottom_right_img) / img_height;
 
             //todo: these *should* really be error checked
-            double x1 = strtod(argv[6], nullptr);
-            double y1 = strtod(argv[7], nullptr);
-            double x2 = strtod(argv[8], nullptr);
-            double y2 = strtod(argv[9], nullptr);
+            double x1 = strtod(argv[8], nullptr);
+            double y1 = strtod(argv[9], nullptr);
+            double x2 = strtod(argv[10], nullptr);
+            double y2 = strtod(argv[11], nullptr);
 
             complex_t first = complex_t{left_top.real() + x1 * delta_real, left_top.imag() - y1 * delta_img};
             complex_t second = complex_t{left_top.real() + x2 * delta_real, left_top.imag() - y2 * delta_img};
-            printf("Pixels (%.2f, %.2f), and (%.2f, %.2f) are at (%.10f, %+.10f) and (%.10f, %+.10f)\n", x1, y1, x2, y2,
+            printf("Pixels (%.2f, %.2f), and (%.2f, %.2f) at image width and height (%zu, %zu) are at (%.10f, %+.10f) and (%.10f, %+.10f)\n", x1, y1, x2, y2,
+                   img_width, img_height,
                    first.real(), first.imag(),
                    second.real(), second.imag());
             return 0;
@@ -123,14 +128,14 @@ int main(int argc, char** argv) {
 
     const size_t num_threads = sysconf(_SC_NPROCESSORS_CONF); //very POSIX specific
 
-    auto grid = new complex_t[img_height * img_width];
+//    auto grid = new complex_t[img_height * img_width];
     auto pixels = new uint32_t[img_height * img_width]; //exit() is our garbage collector for this one
 
     auto* args = new thread_args[num_threads];
     auto* thread_ids = new thrd_t[num_threads - 1];
 
     for (size_t i = 0; i < num_threads; i++) {
-        args[i] = {num_threads, i, max_itrs, img_width, img_height, left_top, right_bottom, grid, pixels};
+        args[i] = {num_threads, i, max_itrs, img_width, img_height, left_top, right_bottom, /*grid,*/ pixels};
         if (i != 0) { //Using the main thread to do the first pool after
             thrd_t id;
             if (thrd_create(&id, &compute_fractal, args + i) == thrd_error) {
@@ -145,7 +150,7 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < num_threads - 1; i++)
         thrd_join(thread_ids[i], nullptr);
 
-    delete[] grid;
+//    delete[] grid;
     delete[] thread_ids;
     delete[] args;
 
@@ -171,6 +176,7 @@ int main(int argc, char** argv) {
     asprintf(&filename, "%s/(%.10f, %+.10f)-(%.10f, %+.10f) (%zu itr) (%zupx x %zupx).png", type_name, real(left_top),
              imag(left_top), real(right_bottom), imag(right_bottom), max_itrs, img_width, img_height);
     lodepng_encode32_file(filename, (unsigned char*) pixels, img_width, img_height);
+//    generateBitmapImage(pixels, img_height, img_width, filename);
     free(filename);
 
     printf("image write finished\n");
@@ -194,23 +200,23 @@ int compute_fractal(void* args) {
     const complex_t::value_type delta_real = (right_bottom.real() - left_top.real()) / img_width;
     const complex_t::value_type delta_img = (left_top.imag() - right_bottom.imag()) / img_height;
 
-    complex_t* grid = ((thread_args*) args)->grid;
-    uint32_t* pixels = ((thread_args*) args)->pixels;
+//    complex_t* grid = ((thread_args*) args)->grid;
+    auto* pixels = ((thread_args*) args)->pixels;
 //    printf("id: %zu, num_threads: %zu, delta_img: %f, delta_real: %f\n", thread_num, num_threads, delta_img, delta_real);
 
-    for (size_t y = thread_num; y < img_height; y += num_threads) {
-        complex_t y_val = complex_t{0, left_top.imag() - y * delta_img};
-
-        for (size_t x = 0; x < img_width; x++) {
-            complex_t x_val = complex_t{left_top.real() + x * delta_real, 0};
-            grid[y * img_width + x] = x_val + y_val;
-        }
-    }
+//    for (size_t y = thread_num; y < img_height; y += num_threads) {
+//        complex_t y_val = complex_t{0, left_top.imag() - y * delta_img};
+//
+//        for (size_t x = 0; x < img_width; x++) {
+//            complex_t x_val = complex_t{left_top.real() + x * delta_real, 0};
+//            grid[y * img_width + x] = x_val + y_val;
+//        }
+//    }
 
     for (size_t y = thread_num; y < img_height; y += num_threads) {
         for (size_t x = 0; x < img_width; x++) {
             complex_t z = complex_t{0, 0};
-            complex_t c = grid[y * img_width + x];
+            complex_t c = complex_t{left_top.real() + x * delta_real, left_top.imag() - y * delta_img}; //grid[y * img_width + x];
 //            std::cout << c << "\n";
             bool broke = false;
             size_t itr;
@@ -234,7 +240,7 @@ int compute_fractal(void* args) {
             uint8_t green = ((sin(0.0565* continuous_index + 2) + 1) * (230 / 2.0) + 25);
             uint8_t blue =  ((sin(0.055 * continuous_index + 1) + 1) * (230 / 2.0) + 25);
             uint8_t alpha = 255;
-            colour colour{red, green, blue, alpha};
+            Colour colour{red, green, blue, alpha};
             pixels[y * img_width + x] = colour.packed();
         }
     }
